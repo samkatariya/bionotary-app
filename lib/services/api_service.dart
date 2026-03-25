@@ -14,6 +14,7 @@ class ApiService {
   }
 
   /// Login and store JWT. Call this when backend returns { "token": "..." }.
+  /// Also stores email from response, or the login email if not in response.
   static Future<Map<String, dynamic>> login({
     required String email,
     required String password,
@@ -26,12 +27,21 @@ class ApiService {
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     if (response.statusCode == 200 && data['token'] != null) {
       await storage.write(key: 'jwt', value: data['token'] as String);
+      final storedEmail = data['email'] as String? ??
+          (data['user'] is Map ? (data['user'] as Map)['email'] as String? : null) ??
+          email;
+      await storage.write(key: 'user_email', value: storedEmail);
     }
     return data;
   }
 
   static Future<void> logout() async {
     await storage.delete(key: 'jwt');
+    await storage.delete(key: 'user_email');
+  }
+
+  static Future<String?> getStoredUserEmail() async {
+    return await storage.read(key: 'user_email');
   }
 
   static Future<bool> hasToken() async {
@@ -46,6 +56,9 @@ class ApiService {
     required String sha256,
   }) async {
     final token = await _getToken();
+    if (token == null || token.isEmpty) {
+      throw Exception('JWT missing. Please log in again.');
+    }
     final response = await http.post(
       Uri.parse('$baseUrl/documents'),
       headers: {
@@ -68,6 +81,9 @@ class ApiService {
     required String contractAddress,
   }) async {
     final token = await _getToken();
+    if (token == null || token.isEmpty) {
+      throw Exception('JWT missing. Please log in again.');
+    }
     final response = await http.post(
       Uri.parse('$baseUrl/notarizations'),
       headers: {
@@ -84,9 +100,48 @@ class ApiService {
     return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
+  static Future<void> saveApplicantDetails({
+    required String firstName,
+    required String middleName,
+    required String lastName,
+    required String aadhaar,
+    required String email,
+    required String pan,
+    required String phone,
+  }) async {
+    final token = await _getToken();
+    if (token == null || token.isEmpty) {
+      throw Exception('Not authenticated');
+    }
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/applicants'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({
+        'first_name': firstName,
+        'middle_name': middleName.isEmpty ? null : middleName,
+        'last_name': lastName,
+        'aadhaar': aadhaar,
+        'email': email,
+        'pan': pan.isEmpty ? null : pan,
+        'phone': phone.isEmpty ? null : phone,
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Failed to save applicant: ${response.body}');
+    }
+  }
+
   /// GET /documents/my-documents — list of user's documents with notarization.
   static Future<List<dynamic>> getMyDocuments() async {
     final token = await _getToken();
+    if (token == null || token.isEmpty) {
+      throw Exception('JWT missing. Please log in again.');
+    }
     final response = await http.get(
       Uri.parse('$baseUrl/documents/my-documents'),
       headers: {'Authorization': 'Bearer $token'},
@@ -94,6 +149,9 @@ class ApiService {
     if (response.statusCode != 200) {
       throw Exception('Failed to load documents: ${response.body}');
     }
-    return jsonDecode(response.body) as List<dynamic>;
+
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    final docs = data['documents'] as List<dynamic>? ?? [];
+    return docs;
   }
 }

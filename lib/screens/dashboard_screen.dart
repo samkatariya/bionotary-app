@@ -44,7 +44,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("My Documents"),
+        title: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text("My Documents"),
+            FutureBuilder<String?>(
+              future: ApiService.getStoredUserEmail(),
+              builder: (context, snap) {
+                final email = snap.data;
+                return Text(
+                  email != null && email.isNotEmpty
+                      ? "Logged in as $email"
+                      : "Not logged in",
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.logout),
@@ -90,19 +110,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   const SizedBox(height: 8),
                   FilledButton(
-                    onPressed: () {
-                      Navigator.of(context).pushReplacement(
-                        MaterialPageRoute(
-                          builder: (_) => BioNotaryHomePage(
-                            onLogout: (ctx) {
-                              Navigator.of(ctx).pushAndRemoveUntil(
-                                MaterialPageRoute(
-                                    builder: (_) => const BioNotaryApp()),
-                                (route) => false,
-                              );
-                            },
-                          ),
-                        ),
+                    onPressed: () async {
+                      // If we got here due to missing/invalid JWT, force
+                      // re-authentication by going back to the app root.
+                      await ApiService.logout();
+                      if (!context.mounted) return;
+                      Navigator.of(context).pushAndRemoveUntil(
+                        MaterialPageRoute(builder: (_) => const BioNotaryApp()),
+                        (route) => false,
                       );
                     },
                     child: const Text("Continue to app"),

@@ -176,20 +176,6 @@ class _LoginScreenState extends State<LoginScreen> {
                           )
                           : const Text('Log in'),
                 ),
-                const SizedBox(height: 12),
-                TextButton(
-                  onPressed:
-                      _loading
-                          ? null
-                          : () {
-                            Navigator.of(context).pushReplacement(
-                              MaterialPageRoute(
-                                builder: (_) => const DashboardScreen(),
-                              ),
-                            );
-                          },
-                  child: const Text('Skip'),
-                ),
               ],
             ),
           ),
@@ -223,7 +209,27 @@ class _BioNotaryHomePageState extends State<BioNotaryHomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('BioNotary'),
+        title: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('BioNotary'),
+            FutureBuilder<String?>(
+              future: ApiService.getStoredUserEmail(),
+              builder: (context, snap) {
+                final email = snap.data;
+                return Text(
+                  email != null && email.isNotEmpty
+                      ? "Logged in as $email"
+                      : "Not logged in",
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                );
+              },
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.history),
@@ -533,35 +539,21 @@ class _ApplicantDetailsCardState extends State<ApplicantDetailsCard> {
     });
 
     try {
-      final uri = Uri.parse('$_backendBaseUrl/applicants');
-      final response = await http.post(
-        uri,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'first_name': _firstNameController.text.trim(),
-          'middle_name':
-              _middleNameController.text.trim().isEmpty
-                  ? null
-                  : _middleNameController.text.trim(),
-          'last_name': _lastNameController.text.trim(),
-          'aadhaar': _aadhaarController.text.trim(),
-          'email': _emailController.text.trim(),
-          'pan': _panController.text.trim(),
-          'phone': _phoneController.text.trim(),
-        }),
+      await ApiService.saveApplicantDetails(
+        firstName: _firstNameController.text.trim(),
+        middleName: _middleNameController.text.trim(),
+        lastName: _lastNameController.text.trim(),
+        aadhaar: _aadhaarController.text.trim(),
+        email: _emailController.text.trim(),
+        pan: _panController.text.trim(),
+        phone: _phoneController.text.trim(),
       );
 
       if (!mounted) return;
 
-      if (response.statusCode == 200) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Applicant details saved')),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to save details: ${response.body}')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Applicant details saved')),
+      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -582,9 +574,9 @@ class _ApplicantDetailsCardState extends State<ApplicantDetailsCard> {
       title: 'Applicant Details',
       child: Form(
         key: _formKey,
-        child: Column(
-          children: [
-            _TextFieldRow(
+      child: Column(
+        children: [
+          _TextFieldRow(
               fields: [
                 _LabeledField(
                   label: 'First Name',
@@ -594,12 +586,12 @@ class _ApplicantDetailsCardState extends State<ApplicantDetailsCard> {
                   label: 'Middle Name (Optional)',
                   controller: _middleNameController,
                 ),
-              ],
-            ),
-            const SizedBox(height: 12),
+            ],
+          ),
+          const SizedBox(height: 12),
             _LabeledField(label: 'Last Name', controller: _lastNameController),
-            const SizedBox(height: 12),
-            _TextFieldRow(
+          const SizedBox(height: 12),
+          _TextFieldRow(
               fields: [
                 _LabeledField(
                   label: 'Aadhaar Number (12 Digits)',
@@ -611,10 +603,10 @@ class _ApplicantDetailsCardState extends State<ApplicantDetailsCard> {
                   controller: _emailController,
                   keyboardType: TextInputType.emailAddress,
                 ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            _TextFieldRow(
+            ],
+          ),
+          const SizedBox(height: 12),
+          _TextFieldRow(
               fields: [
                 _LabeledField(
                   label: 'PAN Card Number',
@@ -715,10 +707,10 @@ class _UploadDocumentsCardState extends State<UploadDocumentsCard> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
+      ScaffoldMessenger.of(
+        context,
         ).showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
+    }
     } finally {
       if (mounted) setState(() => _isSending = false);
     }
