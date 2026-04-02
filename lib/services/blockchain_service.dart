@@ -4,8 +4,8 @@ import 'package:flutter/foundation.dart';
 
 // Platform-specific imports
 import 'package:flutter_web3/flutter_web3.dart' if (dart.library.html) 'package:flutter_web3/flutter_web3.dart';
-import 'dart:js_util' as js_util;
 import 'mobile_wallet_service.dart';
+import 'js_interop_stub.dart' as js_interop if (dart.library.html) 'js_interop_web.dart';
 
 class BlockchainService {
   static const String contractAddress =
@@ -41,23 +41,32 @@ class BlockchainService {
 
     // Ensure Sepolia
     final chainId = await ethereum!.getChainId();
+    print("ETH: current chainId=$chainId");
     if (chainId != 11155111) {
       throw Exception("Please switch MetaMask to Sepolia");
     }
 
     // Request account access if needed
     final accounts = await ethereum!.requestAccount();
+    print("ETH: accounts=$accounts");
     if (accounts.isEmpty) {
       throw Exception("No wallet account connected");
     }
+    final selectedAddress = ethereum!.selectedAddress;
+    print("ETH: selectedAddress=$selectedAddress");
 
     // Ensure MetaMask is switched to Sepolia (0xaa36a7)
+    final switchChainParam = js_interop.jsify(<String, dynamic>{
+      "chainId": "0xaa36a7",
+    });
     await ethereum!.request(
       "wallet_switchEthereumChain",
       [
-        {"chainId": "0xaa36a7"}
+        switchChainParam
       ],
     );
+    final chainIdAfter = await ethereum!.getChainId();
+    print("ETH: chainId after switch=$chainIdAfter");
 
     final cleaned = docHashHex.startsWith("0x") ? docHashHex : "0x$docHashHex";
     final userHashHex = sha256.convert(walletAddress.codeUnits).toString();
@@ -67,37 +76,66 @@ class BlockchainService {
     final calldata = notarizeSelector +
         cleaned.substring(2).padLeft(64, '0') +
         userHash.substring(2).padLeft(64, '0');
+    print("ETH: contractAddress=$contractAddress");
+    print("ETH: calldata startsWith 0x=${calldata.startsWith("0x")}");
+    print("ETH: calldata length=${calldata.length}");
+    print("ETH: calldata preview=${calldata.length > 18 ? '${calldata.substring(0, 12)}...${calldata.substring(calldata.length - 6)}' : calldata}");
+
+    final txObject = <String, dynamic>{
+      "to": contractAddress,
+      "data": calldata,
+    };
+
+    Object? estimateGasError;
 
     try {
-      // Get current account
-      final account = accounts.first;
+      // Send transaction via eth_sendTransaction JSON-RPC.
+      // Use the same ethereum!.request(...) signature as wallet_switchEthereumChain above
+      // to avoid payload shape mismatches.
+      print("ETH: sending eth_sendTransaction...");
 
-      // Send transaction via eth_sendTransaction JSON-RPC
-      final promise = js_util.callMethod(
-        ethereum!,
-        'request',
+      // Log estimateGas first; if params shape is wrong, you'll see it here too.
+      try {
+        // Build a fresh JS object per RPC call.
+        // JS objects are passed by reference and MetaMask may mutate it.
+        final gasParam = js_interop.jsify(txObject);
+        final gas = await ethereum!.request(
+          "eth_estimateGas",
+          [
+            gasParam,
+          ],
+        );
+        print("ETH: estimateGas result=$gas");
+      } catch (e, stack) {
+        print("ETH: estimateGas ERROR: $e");
+        print("ETH: estimateGas STACK: $stack");
+        estimateGasError = e;
+      }
+
+      // Build a fresh JS object per RPC call (do not reuse across calls).
+      final sendParam = js_interop.jsify(txObject);
+      final result = await ethereum!.request(
+        "eth_sendTransaction",
         [
-          {
-            "method": "eth_sendTransaction",
-            "params": [
-              {
-                "from": account,
-                "to": contractAddress,
-                "data": calldata,
-                "value": "0x0",
-              }
-            ],
-          }
+          sendParam
         ],
       );
-
-      // Convert promise to future with immediate string coercion
-      final result = await js_util.promiseToFuture(promise);
+      print("ETH: eth_sendTransaction result=$result");
       return result.toString();
     } catch (e, stack) {
-      print("Web Notarize ERROR: $e");
-      print("STACK: $stack");
-      rethrow;
+      // Include the payload in the thrown error so you can see it in the app UI
+      // even if console/terminal logs are not visible.
+      final msg = StringBuffer()
+        ..writeln("MetaMask eth_sendTransaction failed: $e")
+        ..writeln("chainId=$chainId")
+        ..writeln("chainIdAfter=$chainIdAfter")
+        ..writeln("selectedAddress=$selectedAddress")
+        ..writeln("txObject=$txObject")
+        ..writeln("calldataLen=${calldata.length}")
+        ..writeln("estimateGasError=$estimateGasError")
+        ..writeln("stack=$stack");
+      print(msg.toString());
+      throw Exception(msg.toString());
     }
   }
 

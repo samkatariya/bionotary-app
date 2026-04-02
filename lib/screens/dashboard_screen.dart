@@ -40,6 +40,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  void _continueToApp() {
+    // `DashboardScreen` is typically pushed from `BioNotaryHomePage`,
+    // so popping returns the user to the app.
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+      return;
+    }
+
+    // Fallback for edge-cases where there's no route to pop.
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const BioNotaryApp()),
+      (route) => false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -137,70 +152,90 @@ class _DashboardScreenState extends State<DashboardScreen> {
             return const Center(child: Text("No documents yet"));
           }
 
-          return ListView.builder(
-            itemCount: docs.length,
-            itemBuilder: (context, index) {
-              final doc = docs[index] as Map<String, dynamic>;
-              final status =
-                  doc["notarization_status"] as String? ??
-                  ((doc["transaction_hash"] != null &&
-                          doc["transaction_hash"].toString().isNotEmpty)
-                      ? "confirmed"
-                      : "pending");
+          return Column(
+            children: [
+              Expanded(
+                child: ListView.builder(
+                  itemCount: docs.length,
+                  itemBuilder: (context, index) {
+                    final doc = docs[index] as Map<String, dynamic>;
+                    final status =
+                        doc["notarization_status"] as String? ??
+                        ((doc["transaction_hash"] != null &&
+                                doc["transaction_hash"]
+                                    .toString()
+                                    .isNotEmpty)
+                            ? "confirmed"
+                            : "pending");
 
-              return Card(
-                margin: const EdgeInsets.all(10),
+                    return Card(
+                      margin: const EdgeInsets.all(10),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              doc["file_name"]?.toString() ?? "—",
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              "Hash: ${doc["sha256_hash"] ?? "—"}",
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
+                                const Text("Status: "),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: _statusColor(status).withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    status,
+                                    style: TextStyle(color: _statusColor(status)),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (doc["transaction_hash"] != null &&
+                                doc["transaction_hash"]
+                                    .toString()
+                                    .isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              TextButton(
+                                onPressed: () =>
+                                    _openTx(doc["transaction_hash"].toString()),
+                                child: const Text("View on Sepolia"),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              SafeArea(
+                top: false,
                 child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        doc["file_name"]?.toString() ?? "—",
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        "Hash: ${doc["sha256_hash"] ?? "—"}",
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          const Text("Status: "),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: _statusColor(status).withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              status,
-                              style: TextStyle(color: _statusColor(status)),
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (doc["transaction_hash"] != null &&
-                          doc["transaction_hash"].toString().isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        TextButton(
-                          onPressed:
-                              () => _openTx(doc["transaction_hash"].toString()),
-                          child: const Text("View on Sepolia"),
-                        ),
-                      ],
-                    ],
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: FilledButton(
+                    onPressed: _continueToApp,
+                    child: const Text("Continue to app"),
                   ),
                 ),
-              );
-            },
+              ),
+            ],
           );
         },
       ),
