@@ -1,12 +1,9 @@
 import 'package:crypto/crypto.dart';
-import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 
-// Platform-specific imports
-import 'package:flutter_web3/flutter_web3.dart' if (dart.library.html) 'package:flutter_web3/flutter_web3.dart';
-import 'mobile_wallet_service.dart';
-import 'js_interop_stub.dart' as js_interop if (dart.library.html) 'js_interop_web.dart';
+import 'package:flutter_web3/flutter_web3.dart';
+import 'js_interop_stub.dart' as js_interop if (dart.library.js_interop) 'js_interop_web.dart';
 
 class BlockchainService {
   /// Deployed notary **contract** (not a user wallet). Override per build:
@@ -22,6 +19,20 @@ class BlockchainService {
   /// `ethers.id('notarize(bytes32,bytes32)')` — must match the deployed contract.
   /// (The old value `0x4c0f4d72` does not match this Sepolia deployment.)
   static const String notarizeSelector = "0xe48a2630";
+
+  static final RegExp _ethAddressRegex = RegExp(r'^0x[a-fA-F0-9]{40}$');
+
+  static String _normalizeAddress(String raw, {required String label}) {
+    var v = raw.trim();
+    if ((v.startsWith('"') && v.endsWith('"')) ||
+        (v.startsWith("'") && v.endsWith("'"))) {
+      v = v.substring(1, v.length - 1).trim();
+    }
+    if (!_ethAddressRegex.hasMatch(v)) {
+      throw FormatException('$label is not a valid Ethereum address: $raw');
+    }
+    return v;
+  }
 
   /// Normalizes `eth_chainId` / `getChainId()` values (hex string, decimal string, int).
   static int parseChainId(dynamic raw) {
@@ -113,6 +124,14 @@ class BlockchainService {
       throw Exception("No wallet account connected");
     }
     final selectedAddress = ethereum!.selectedAddress;
+    final fromAddress = _normalizeAddress(
+      accounts.first.toString(),
+      label: 'wallet account',
+    );
+    final toAddress = _normalizeAddress(
+      contractAddress,
+      label: 'contract address',
+    );
     print("ETH: selectedAddress=$selectedAddress");
 
     await _ensureSepoliaChain();
@@ -134,19 +153,21 @@ class BlockchainService {
         cleaned.substring(2).padLeft(64, '0') +
         userHash.substring(2).padLeft(64, '0');
     print("ETH: contractAddress=$contractAddress");
+    print("ETH: normalized from=$fromAddress");
+    print("ETH: normalized to=$toAddress");
     print("ETH: calldata startsWith 0x=${calldata.startsWith("0x")}");
     print("ETH: calldata length=${calldata.length}");
     print(
       "ETH: calldata preview=${calldata.length > 18 ? '${calldata.substring(0, 12)}...${calldata.substring(calldata.length - 6)}' : calldata}",
     );
 
-    // Only keys MetaMask expects; build via JSON.parse so the JS object has no
-    // Dart/internal enumerable properties (fixes “unexpected keys” errors).
-    final txJson = jsonEncode(<String, String>{
-      'to': contractAddress,
+    // Only keys MetaMask expects; pass a clean object for JS interop.
+    final txMap = <String, String>{
+      'from': fromAddress,
+      'to': toAddress,
       'data': calldata,
       'value': '0x0',
-    });
+    };
     String? estimateGasErrorText;
     Object? estimateGasError;
 
@@ -157,7 +178,7 @@ class BlockchainService {
         // Fresh object per RPC call — MetaMask may mutate the param object.
         final gas = await ethereum!.request(
           "eth_estimateGas",
-          [js_interop.parseJsonToJsObject(txJson)],
+          [js_interop.jsify(txMap)],
         );
         print("ETH: estimateGas OK result=$gas");
       } catch (e, stack) {
@@ -167,7 +188,7 @@ class BlockchainService {
         print("ETH: estimateGas STACK: $stack");
       }
 
-      final sendParam = js_interop.parseJsonToJsObject(txJson);
+      final sendParam = js_interop.jsify(txMap);
       final result = await ethereum!.request(
         "eth_sendTransaction",
         [sendParam],
@@ -190,7 +211,7 @@ class BlockchainService {
         ..writeln("--- context ---")
         ..writeln("chainIdAfter=$chainIdAfter (expected $sepoliaChainId)")
         ..writeln("selectedAddress=$selectedAddress")
-        ..writeln("txJson=$txJson")
+        ..writeln("txMap=$txMap")
         ..writeln("calldataLen=${calldata.length}")
         ..writeln("stack=$stack");
       print(msg.toString());
@@ -198,34 +219,15 @@ class BlockchainService {
     }
   }
 
-  /// Android implementation using WalletConnect
+  /// Android: Sepolia notarization is only supported via the **web** app with MetaMask.
+  /// WalletConnect is not wired end-to-end; use `flutter build web` and open in Chrome.
   static Future<String> _notarizeAndroid(
     String docHashHex,
     String walletAddress,
   ) async {
-    if (!MobileWalletService.isConnected) {
-      throw Exception("WalletConnect not connected. Connect wallet first.");
-    }
-
-    final cleaned = docHashHex.startsWith("0x") ? docHashHex : "0x$docHashHex";
-    final userHash = witnessBytes32Hex(walletAddress);
-
-    // Build the calldata: selector + docHash + witness (bytes32)
-    final calldata = notarizeSelector +
-        cleaned.substring(2).padLeft(64, '0') +
-        userHash.substring(2).padLeft(64, '0');
-
-    try {
-      final txHash = await MobileWalletService.sendTransaction(
-        to: contractAddress,
-        data: calldata,
-        value: '0x0',
-      );
-      return txHash;
-    } catch (e, stack) {
-      print("Android Notarize ERROR: $e");
-      print("STACK: $stack");
-      rethrow;
-    }
+    throw UnsupportedError(
+      'Sepolia notarization requires the web build with MetaMask. '
+      'Run `flutter run -d chrome` or deploy the web app; Android WalletConnect is not enabled.',
+    );
   }
 }

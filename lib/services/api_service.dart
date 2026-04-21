@@ -1,20 +1,39 @@
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
+import 'package:bionotary/app_config.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
 
 class ApiService {
-  static final String baseUrl = kIsWeb
-      ? 'http://localhost:5000'
-      : 'http://10.0.2.2:5000';
+  static String get baseUrl => AppConfig.resolvedApiBaseUrl;
   static final storage = FlutterSecureStorage();
 
   static Future<String?> _getToken() async {
     return await storage.read(key: 'jwt');
   }
 
-  /// Login and store JWT. Call this when backend returns { "token": "..." }.
-  /// Also stores email from response, or the login email if not in response.
+  static Future<Map<String, dynamic>> register({
+    required String name,
+    required String email,
+    required String password,
+    String? phone,
+  }) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/register'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'name': name,
+        'email': email,
+        'password': password,
+        if (phone != null && phone.isNotEmpty) 'phone': phone,
+      }),
+    );
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode >= 400) {
+      throw Exception(data['message']?.toString() ?? response.body);
+    }
+    return data;
+  }
+
   static Future<Map<String, dynamic>> login({
     required String email,
     required String password,
@@ -27,10 +46,53 @@ class ApiService {
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     if (response.statusCode == 200 && data['token'] != null) {
       await storage.write(key: 'jwt', value: data['token'] as String);
-      final storedEmail = data['email'] as String? ??
-          (data['user'] is Map ? (data['user'] as Map)['email'] as String? : null) ??
+      final storedEmail =
+          data['email'] as String? ??
+          (data['user'] is Map
+              ? (data['user'] as Map)['email'] as String?
+              : null) ??
           email;
       await storage.write(key: 'user_email', value: storedEmail);
+    }
+    return data;
+  }
+
+  static Future<Map<String, dynamic>> fingerprintLogin() async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/fingerprint/login'),
+      headers: {'Content-Type': 'application/json'},
+      body: '{}',
+    );
+    Map<String, dynamic> data;
+    try {
+      data = jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (_) {
+      data = {'message': response.body};
+    }
+    if (response.statusCode == 200 && data['token'] != null) {
+      await storage.write(key: 'jwt', value: data['token'] as String);
+      final email = data['email'] as String? ?? '';
+      await storage.write(key: 'user_email', value: email);
+    }
+    return data;
+  }
+
+  static Future<Map<String, dynamic>> enrollFingerprint() async {
+    final token = await _getToken();
+    if (token == null || token.isEmpty) {
+      throw Exception('JWT missing. Please log in again.');
+    }
+    final response = await http.post(
+      Uri.parse('$baseUrl/auth/fingerprint/enroll'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: '{}',
+    );
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    if (response.statusCode != 200) {
+      throw Exception(data['message']?.toString() ?? response.body);
     }
     return data;
   }
@@ -136,7 +198,6 @@ class ApiService {
     }
   }
 
-  /// GET /documents/my-documents — list of user's documents with notarization.
   static Future<List<dynamic>> getMyDocuments() async {
     final token = await _getToken();
     if (token == null || token.isEmpty) {
@@ -153,5 +214,26 @@ class ApiService {
     final data = jsonDecode(response.body) as Map<String, dynamic>;
     final docs = data['documents'] as List<dynamic>? ?? [];
     return docs;
+  }
+
+  /// Registered document + on-chain anchor for this user, if any.
+  static Future<Map<String, dynamic>?> lookupDocumentByHash(String sha256Hex) async {
+    final token = await _getToken();
+    if (token == null || token.isEmpty) {
+      throw Exception('JWT missing. Please log in again.');
+    }
+    final clean = sha256Hex.replaceFirst(RegExp(r'^0x'), '').trim();
+    final response = await http.get(
+      Uri.parse('$baseUrl/documents/lookup-by-hash?sha256=$clean'),
+      headers: {'Authorization': 'Bearer $token'},
+    );
+    if (response.statusCode == 404) {
+      return null;
+    }
+    if (response.statusCode != 200) {
+      throw Exception('Lookup failed: ${response.body}');
+    }
+    final data = jsonDecode(response.body) as Map<String, dynamic>;
+    return data['document'] as Map<String, dynamic>?;
   }
 }

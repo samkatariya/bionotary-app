@@ -2,9 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:crypto/crypto.dart';
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'services/wallet_service.dart';
 import 'services/blockchain_service.dart';
 import 'services/api_service.dart';
@@ -13,9 +11,6 @@ import 'screens/dashboard_screen.dart';
 void main() {
   runApp(const BioNotaryApp());
 }
-
-const String _backendBaseUrl =
-    kIsWeb ? 'http://localhost:5000' : 'http://10.0.2.2:5000';
 
 class BioNotaryApp extends StatelessWidget {
   const BioNotaryApp({super.key});
@@ -75,45 +70,96 @@ class _AuthGateState extends State<AuthGate> {
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key, required this.onLoginSuccess});
 
-  final VoidCallback onLoginSuccess;
+  final Future<void> Function() onLoginSuccess;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _phoneController = TextEditingController();
+  bool _registerMode = false;
   bool _loading = false;
   String? _error;
 
   @override
   void dispose() {
+    _nameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
+    _phoneController.dispose();
     super.dispose();
   }
 
-  Future<void> _login() async {
+  Future<void> _submit() async {
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
+      if (_registerMode) {
+        final phoneTrim = _phoneController.text.trim();
+        await ApiService.register(
+          name: _nameController.text.trim(),
+          email: _emailController.text.trim(),
+          password: _passwordController.text,
+          phone: phoneTrim.isEmpty ? null : phoneTrim,
+        );
+        if (!mounted) return;
+        setState(() {
+          _registerMode = false;
+          _loading = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Account created. You can log in now.')),
+        );
+        return;
+      }
+
       final res = await ApiService.login(
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
       if (!mounted) return;
       if (res['token'] != null) {
-        if (!mounted) return;
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const DashboardScreen()),
-        );
+        await widget.onLoginSuccess();
+        if (mounted) {
+          setState(() => _loading = false);
+        }
       } else {
         setState(() {
           _loading = false;
           _error = res['message']?.toString() ?? 'Login failed';
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
+  Future<void> _fingerprintLogin() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final res = await ApiService.fingerprintLogin();
+      if (!mounted) return;
+      if (res['token'] != null) {
+        await widget.onLoginSuccess();
+        if (mounted) setState(() => _loading = false);
+      } else {
+        setState(() {
+          _loading = false;
+          _error = res['message']?.toString() ?? 'Fingerprint login failed';
         });
       }
     } catch (e) {
@@ -143,7 +189,28 @@ class _LoginScreenState extends State<LoginScreen> {
                   style: Theme.of(context).textTheme.headlineMedium,
                   textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 16),
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment<bool>(value: false, label: Text('Log in')),
+                    ButtonSegment<bool>(value: true, label: Text('Register')),
+                  ],
+                  selected: {_registerMode},
+                  onSelectionChanged: (s) {
+                    setState(() {
+                      _registerMode = s.first;
+                      _error = null;
+                    });
+                  },
+                ),
+                const SizedBox(height: 24),
+                if (_registerMode) ...[
+                  TextField(
+                    controller: _nameController,
+                    decoration: const InputDecoration(labelText: 'Full name'),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 TextField(
                   controller: _emailController,
                   keyboardType: TextInputType.emailAddress,
@@ -155,6 +222,16 @@ class _LoginScreenState extends State<LoginScreen> {
                   decoration: const InputDecoration(labelText: 'Password'),
                   obscureText: true,
                 ),
+                if (_registerMode) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _phoneController,
+                    keyboardType: TextInputType.phone,
+                    decoration: const InputDecoration(
+                      labelText: 'Phone (optional)',
+                    ),
+                  ),
+                ],
                 if (_error != null) ...[
                   const SizedBox(height: 12),
                   Text(
@@ -166,7 +243,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ],
                 const SizedBox(height: 24),
                 FilledButton(
-                  onPressed: _loading ? null : _login,
+                  onPressed: _loading ? null : _submit,
                   child:
                       _loading
                           ? const SizedBox(
@@ -174,8 +251,16 @@ class _LoginScreenState extends State<LoginScreen> {
                             width: 20,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                          : const Text('Log in'),
+                          : Text(_registerMode ? 'Create account' : 'Log in'),
                 ),
+                if (!_registerMode) ...[
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: _loading ? null : _fingerprintLogin,
+                    icon: const Icon(Icons.fingerprint),
+                    label: const Text('Log in with fingerprint'),
+                  ),
+                ],
               ],
             ),
           ),
@@ -202,6 +287,7 @@ class _BioNotaryHomePageState extends State<BioNotaryHomePage> {
 
   Future<void> _logout() async {
     await ApiService.logout();
+    if (!mounted) return;
     widget.onLogout(context);
   }
 
@@ -231,6 +317,24 @@ class _BioNotaryHomePageState extends State<BioNotaryHomePage> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.fingerprint),
+            tooltip: 'Enroll fingerprint',
+            onPressed: () async {
+              try {
+                await ApiService.enrollFingerprint();
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Fingerprint enrolled')),
+                );
+              } catch (e) {
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(
+                  context,
+                ).showSnackBar(SnackBar(content: Text('Enroll failed: $e')));
+              }
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.history),
             tooltip: 'My Documents',
@@ -371,134 +475,6 @@ class _SingleColumnLayout extends StatelessWidget {
   }
 }
 
-class HistoryScreen extends StatefulWidget {
-  const HistoryScreen({super.key});
-
-  @override
-  State<HistoryScreen> createState() => _HistoryScreenState();
-}
-
-class _HistoryScreenState extends State<HistoryScreen> {
-  List<Map<String, dynamic>> _documents = [];
-  bool _loading = true;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
-      final list = await ApiService.getMyDocuments();
-      if (mounted)
-        setState(() {
-          _documents = list.cast<Map<String, dynamic>>();
-          _loading = false;
-        });
-    } catch (e) {
-      if (mounted)
-        setState(() {
-          _error = e.toString();
-          _loading = false;
-        });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('My Documents')),
-      body:
-          _loading
-              ? const Center(child: CircularProgressIndicator())
-              : _error != null
-              ? Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(_error!, textAlign: TextAlign.center),
-                      const SizedBox(height: 16),
-                      FilledButton(
-                        onPressed: _load,
-                        child: const Text('Retry'),
-                      ),
-                    ],
-                  ),
-                ),
-              )
-              : _documents.isEmpty
-              ? const Center(child: Text('No documents yet'))
-              : RefreshIndicator(
-                onRefresh: _load,
-                child: ListView.builder(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: _documents.length,
-                  itemBuilder: (context, i) {
-                    final d = _documents[i];
-                    final fileName = d['file_name'] as String? ?? '—';
-                    final sha256 = d['sha256_hash'] as String? ?? '—';
-                    final txHash = d['transaction_hash'] as String?;
-                    final notarized =
-                        txHash != null && txHash.toString().isNotEmpty;
-                    final createdAt =
-                        d['created_at'] != null
-                            ? DateTime.tryParse(
-                              d['created_at'].toString(),
-                            )?.toLocal()
-                            : null;
-                    final dateStr =
-                        createdAt != null
-                            ? '${createdAt.year}-${createdAt.month.toString().padLeft(2, '0')}-${createdAt.day.toString().padLeft(2, '0')}'
-                            : '—';
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              fileName,
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'SHA-256: $sha256',
-                              style: Theme.of(context).textTheme.bodySmall,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            Text(
-                              'Notarized: ${notarized ? "Yes" : "No"}',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                            if (txHash != null && txHash.isNotEmpty)
-                              SelectableText(
-                                'Tx: $txHash',
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
-                            Text(
-                              'Created: $dateStr',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-    );
-  }
-}
-
 class ApplicantDetailsCard extends StatefulWidget {
   const ApplicantDetailsCard({super.key});
 
@@ -533,6 +509,7 @@ class _ApplicantDetailsCardState extends State<ApplicantDetailsCard> {
 
   Future<void> _submitApplicantDetails() async {
     if (_isSubmitting) return;
+    if (!(_formKey.currentState?.validate() ?? false)) return;
 
     setState(() {
       _isSubmitting = true;
@@ -581,6 +558,8 @@ class _ApplicantDetailsCardState extends State<ApplicantDetailsCard> {
                 _LabeledField(
                   label: 'First Name',
                   controller: _firstNameController,
+                  validator: (v) =>
+                      v == null || v.trim().isEmpty ? 'Required' : null,
                 ),
                 _LabeledField(
                   label: 'Middle Name (Optional)',
@@ -589,7 +568,12 @@ class _ApplicantDetailsCardState extends State<ApplicantDetailsCard> {
             ],
           ),
           const SizedBox(height: 12),
-            _LabeledField(label: 'Last Name', controller: _lastNameController),
+            _LabeledField(
+              label: 'Last Name',
+              controller: _lastNameController,
+              validator: (v) =>
+                  v == null || v.trim().isEmpty ? 'Required' : null,
+            ),
           const SizedBox(height: 12),
           _TextFieldRow(
               fields: [
@@ -597,11 +581,23 @@ class _ApplicantDetailsCardState extends State<ApplicantDetailsCard> {
                   label: 'Aadhaar Number (12 Digits)',
                   controller: _aadhaarController,
                   keyboardType: TextInputType.number,
+                  validator: (v) {
+                    final s = v?.trim() ?? '';
+                    if (s.length != 12 || int.tryParse(s) == null) {
+                      return 'Enter 12 digits';
+                    }
+                    return null;
+                  },
                 ),
                 _LabeledField(
                   label: 'Email',
                   controller: _emailController,
                   keyboardType: TextInputType.emailAddress,
+                  validator: (v) {
+                    final s = v?.trim() ?? '';
+                    if (s.isEmpty || !s.contains('@')) return 'Valid email required';
+                    return null;
+                  },
                 ),
             ],
           ),
@@ -651,6 +647,8 @@ class UploadDocumentsCard extends StatefulWidget {
 }
 
 class _UploadDocumentsCardState extends State<UploadDocumentsCard> {
+  static const int _maxFileBytes = 10 * 1024 * 1024;
+
   static String _fileExtensionToType(String fileName) {
     final ext = fileName.split('.').last.toLowerCase();
     if (ext == 'jpg' || ext == 'jpeg') return 'jpeg';
@@ -659,6 +657,17 @@ class _UploadDocumentsCardState extends State<UploadDocumentsCard> {
   }
 
   Future<void> _notarizeLastFile() async {
+    if (!kIsWeb) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Sepolia notarization runs on web with MetaMask. Use Chrome / Flutter web for this step.',
+          ),
+        ),
+      );
+      return;
+    }
     if (_selectedFiles.isEmpty) return;
     if (_walletAddress == null) return;
 
@@ -717,8 +726,19 @@ class _UploadDocumentsCardState extends State<UploadDocumentsCard> {
   }
 
   Future<void> _connectWallet() async {
+    if (!kIsWeb) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Wallet connection for notarization is only available on web (MetaMask).',
+          ),
+        ),
+      );
+      return;
+    }
     final address = await WalletService.connectWallet();
 
+    if (!mounted) return;
     if (address == null) {
       ScaffoldMessenger.of(
         context,
@@ -746,12 +766,27 @@ class _UploadDocumentsCardState extends State<UploadDocumentsCard> {
     if (!mounted) return;
     if (result != null && result.files.isNotEmpty) {
       final List<_SelectedFile> filesWithHashes = <_SelectedFile>[];
+      final List<String> skipped = [];
       for (final PlatformFile f in result.files) {
         final List<int>? bytes = f.bytes;
+        final int byteLen = bytes?.length ?? f.size;
+        if (byteLen > _maxFileBytes) {
+          skipped.add(f.name);
+          continue;
+        }
         final String hash =
             bytes == null ? 'N/A' : sha256.convert(bytes).toString();
         filesWithHashes.add(
-          _SelectedFile(name: f.name, size: f.size, hashHex: hash),
+          _SelectedFile(name: f.name, size: byteLen, hashHex: hash),
+        );
+      }
+      if (skipped.isNotEmpty && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Skipped (>${_maxFileBytes ~/ (1024 * 1024)} MB): ${skipped.join(", ")}',
+            ),
+          ),
         );
       }
       setState(() => _selectedFiles = filesWithHashes);
@@ -790,22 +825,29 @@ class _UploadDocumentsCardState extends State<UploadDocumentsCard> {
           if (_selectedFiles.isNotEmpty)
             _SelectedFilesList(files: _selectedFiles, onRemoveAt: _removeAt),
           const SizedBox(height: 16),
-          if (_walletAddress == null)
-            FilledButton(
-              onPressed: _connectWallet,
-              child: const Text("Connect MetaMask"),
-            )
-          else
-            Text("Connected: $_walletAddress"),
-          const SizedBox(height: 12),
-          if (_selectedFiles.isNotEmpty)
-            FilledButton(
-              onPressed: _isSending ? null : _notarizeLastFile,
-              child:
-                  _isSending
-                      ? const CircularProgressIndicator()
-                      : const Text("Notarize on Sepolia"),
+          if (kIsWeb) ...[
+            if (_walletAddress == null)
+              FilledButton(
+                onPressed: _connectWallet,
+                child: const Text("Connect MetaMask"),
+              )
+            else
+              Text("Connected: $_walletAddress"),
+            const SizedBox(height: 12),
+            if (_selectedFiles.isNotEmpty)
+              FilledButton(
+                onPressed: _isSending ? null : _notarizeLastFile,
+                child:
+                    _isSending
+                        ? const CircularProgressIndicator()
+                        : const Text("Notarize on Sepolia"),
+              ),
+          ] else ...[
+            Text(
+              'Notarize on Sepolia: use the web app (MetaMask).',
+              style: Theme.of(context).textTheme.bodySmall,
             ),
+          ],
           if (_txHash != null) ...[
             const SizedBox(height: 8),
             SelectableText("Tx Hash: $_txHash"),
@@ -852,7 +894,7 @@ class _VerifyIntegrityCardState extends State<VerifyIntegrityCard> {
     }
   }
 
-  void _verify() {
+  Future<void> _verify() async {
     final String? expected =
         widget.uploadedFiles.isNotEmpty
             ? widget.uploadedFiles.last.hashHex.toLowerCase()
@@ -869,17 +911,33 @@ class _VerifyIntegrityCardState extends State<VerifyIntegrityCard> {
       });
     } else {
       final bool matches = expected == actual;
+      String msg =
+          matches
+              ? 'Document Verified Successfully! The hashes match.'
+              : 'Verification failed. The hashes do not match.';
+      if (matches && actual != 'n/a') {
+        try {
+          final reg = await ApiService.lookupDocumentByHash(actual);
+          if (reg != null) {
+            final tx = reg['transaction_hash']?.toString();
+            if (tx != null && tx.isNotEmpty) {
+              msg += ' Registered on server with on-chain tx.';
+            } else {
+              msg += ' Registered on server (not yet anchored on-chain).';
+            }
+          }
+        } catch (_) {
+          /* optional server check */
+        }
+      }
       setState(() {
         _isSuccess = matches;
-        _bannerMessage =
-            matches
-                ? 'Document Verified Successfully! The hashes match.'
-                : 'Verification failed. The hashes do not match.';
+        _bannerMessage = msg;
         _bannerVisible = true;
       });
     }
 
-    Future.delayed(const Duration(seconds: 3), () {
+    Future.delayed(const Duration(seconds: 4), () {
       if (!mounted) return;
       setState(() => _bannerVisible = false);
     });
@@ -1033,11 +1091,13 @@ class _LabeledField extends StatelessWidget {
     required this.label,
     this.controller,
     this.keyboardType,
+    this.validator,
   });
 
   final String label;
   final TextEditingController? controller;
   final TextInputType? keyboardType;
+  final String? Function(String?)? validator;
 
   @override
   Widget build(BuildContext context) {
@@ -1045,6 +1105,7 @@ class _LabeledField extends StatelessWidget {
       controller: controller,
       keyboardType: keyboardType,
       decoration: InputDecoration(labelText: label),
+      validator: validator,
     );
   }
 }
